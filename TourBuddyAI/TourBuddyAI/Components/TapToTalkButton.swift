@@ -8,9 +8,12 @@
 import SwiftUI
 
 struct TapToTalkButton: View {
+    var viewModel: CallViewModel
     var body: some View {
         Button {
-            // Agora voice will be connected later
+            Task {
+                   await viewModel.connect()
+               }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "mic.fill")
@@ -33,9 +36,3 @@ struct TapToTalkButton: View {
     }
 }
 
-#Preview {
-    ZStack {
-        Color.black.ignoresSafeArea()
-        TapToTalkButton()
-    }
-}

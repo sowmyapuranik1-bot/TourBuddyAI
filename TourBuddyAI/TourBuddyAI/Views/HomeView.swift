@@ -8,9 +8,24 @@
 import SwiftUI
 
 struct HomeView: View {
+
+    @State private var viewModel = CallViewModel()
+
     var body: some View {
+
+        Group {
+            if viewModel.phase == .inCall {
+                TourBuddyCallView(vm: viewModel)
+            } else {
+                homeContent
+            }
+        }
+    }
+
+    private var homeContent: some View {
+
         ZStack {
-            
+
             // Background
             LinearGradient(
                 colors: [
@@ -23,11 +38,12 @@ struct HomeView: View {
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
-            
+
             VStack {
-                
+
                 // Heading
                 VStack(spacing: 8) {
+
                     Text("TourBuddy AI")
                         .font(.largeTitle)
                         .fontWeight(.bold)
@@ -38,17 +54,18 @@ struct HomeView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
-                
+
                 Spacer()
-                
+
                 // Main voice area
                 VStack(spacing: 28) {
+
                     TourBuddyOrb()
-                    
-                    TapToTalkButton()
+
+                    TapToTalkButton(viewModel: viewModel)
                 }
                 .frame(maxWidth: .infinity)
-                
+
                 Spacer()
             }
             .padding(.horizontal)
