@@ -7,11 +7,15 @@ transcript (agent state and metrics ride the same data channel).
 
 Pipeline:  DeepgramSTT(nova-3, en) → OpenAI (Agora-managed, keyless) → MiniMaxTTS
 
+TourBuddy flow: user voice → Agora Conversational AI → Maps MCP; explicit
+navigation → FastAPI event → iOS polling → Apple Maps.
+
 OPENAI_API_KEY is optional — set it only if your account requires a BYO key.
 """
 import logging
 import os
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from agora_agent import Area, AsyncAgora
 from agora_agent.agentkit import Agent as AgoraAgent
@@ -34,7 +38,7 @@ class Agent:
         self.app_certificate = os.getenv("AGORA_APP_CERTIFICATE")
         self.greeting = os.getenv(
             "AGENT_GREETING",
-            "Hi there! How can I help you today?",
+            "Hi, I'm TourBuddy, your travel guide. Where would you like to explore today?",
         )
 
         # OpenAI is Agora-managed (keyless). OPENAI_API_KEY is optional.
@@ -68,13 +72,123 @@ class Agent:
         if user_uid <= 0:
             raise ValueError("user_uid is required and cannot be empty")
 
+        # Maps Grounding Lite enriches answers: search_places resolves destinations
+        # and compute_routes answers origin-to-destination route questions.
+        maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        maps_mcp_servers = None
+        if maps_api_key:
+            maps_mcp_servers = [
+                {
+                    "name": "mapsGroundingLite",
+                    "endpoint": "https://mapstools.googleapis.com/mcp",
+                    "transport": "streamable_http",
+                    "headers": {"X-Goog-Api-Key": maps_api_key},
+                    "allowed_tools": [
+                        "search_places",
+                        "compute_routes",
+                    ],
+                }
+            ]
+
+        # This action is only for explicit navigate/open-in-Maps intent.
+        navigation_tools = None
+        navigation_event_url = os.getenv("NAVIGATION_EVENT_URL")
+        if navigation_event_url:
+            parsed_navigation_url = urlparse(navigation_event_url)
+            if parsed_navigation_url.scheme != "https" or not parsed_navigation_url.netloc:
+                raise ValueError("NAVIGATION_EVENT_URL must be an absolute HTTPS URL")
+
+            navigation_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "publish_navigation_destination",
+                        "description": (
+                            "Required action for an explicit user command to navigate to, "
+                            "be taken to, or open a destination in Maps. Resolve the "
+                            "destination with search_places when needed, then call this "
+                            "tool with its coordinates and label. Do not call it for "
+                            "place questions, searches, distance or route information. "
+                            "Do not substitute a Google Maps URL for this action."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "source": {
+                                    "type": "string",
+                                    "description": "Explicit starting location only. Use an empty string if the user did not provide one; never infer or assume a source.",
+                                },
+                                "latitude": {
+                                    "type": "number",
+                                    "description": "Resolved destination latitude.",
+                                },
+                                "longitude": {
+                                    "type": "number",
+                                    "description": "Resolved destination longitude.",
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "description": "Human-readable destination name.",
+                                },
+                            },
+                            "required": ["latitude", "longitude", "label", "source"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "server": {
+                        "method": "POST",
+                        "url": navigation_event_url,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "type": "navigation",
+                            "channel_name": "{{template_variables.channel_name}}",
+                            "latitude": "{{args.latitude}}",
+                            "longitude": "{{args.longitude}}",
+                            "label": "{{args.label}}",
+                            "source": "{{args.source}}",
+                        },
+                        "timeout_ms": 10000,
+                    },
+                }
+            ]
+
+        system_prompt = (
+            "You are TourBuddy AI, a friendly voice tour guide. Help users explore "
+            "places, attractions, food, culture, and travel tips. Use search_places "
+            "to find or identify places and compute_routes for route requests when "
+            "both origin and destination are known. Ask for missing or ambiguous "
+            "locations. Keep replies to one or two sentences and include source "
+            "attribution when available."
+        )
+        if navigation_tools:
+            system_prompt += (
+                " Treat a direct command to navigate to, take the user to, or open a "
+                "destination in Maps as an action request. For those requests, resolve "
+                "the destination with search_places if its coordinates are not already "
+                "known. If the user explicitly provides a starting location, pass it as "
+                "source; otherwise pass an empty string. Never infer or assume a source. "
+                "Then you MUST call publish_navigation_destination with the resolved "
+                "destination latitude, longitude, and label. A route calculation or a "
+                "Google Maps URL is not a substitute for this call. For ordinary place "
+                "questions, place searches, distance questions, and requests for route "
+                "information, answer normally with the relevant Maps tools and do not "
+                "call the navigation action unless the user explicitly asks to navigate "
+                "or open the destination in Maps. After the action succeeds, respond "
+                "briefly and naturally; never mention the tool or provide a Maps URL."
+            )
+
         llm = OpenAI(
             api_key=self.openai_api_key,
             model=self.openai_model,
+            mcp_servers=maps_mcp_servers,
+            tools=navigation_tools,
+            template_variables=(
+                {"channel_name": channel_name} if navigation_tools else None
+            ),
             system_messages=[
                 {
                     "role": "system",
-                    "content": "You are TourBuddy AI, a friendly voice tour guide. Help users explore places, attractions, food, culture, and travel tips. Keep replies to one or two sentences.",
+                    "content": system_prompt,
                 }
             ],
             greeting_message=self.greeting,
@@ -125,6 +239,8 @@ class Agent:
             .with_llm(llm)
             .with_tts(tts)
         )
+        if maps_mcp_servers or navigation_tools:
+            agora_agent = agora_agent.with_tools(True)
 
         session = agora_agent.create_async_session(
             channel=channel_name,

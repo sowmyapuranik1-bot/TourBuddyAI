@@ -12,6 +12,7 @@ import AgoraAgentClientToolkit
 struct TourBuddyCallView: View {
 
     let vm: CallViewModel
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ZStack {
@@ -99,6 +100,35 @@ struct TourBuddyCallView: View {
             .padding()
         }
         .onAppear(perform: requestMicPermission)
+        // Only an explicit navigation action creates this event; ordinary place
+        // questions, searches, and distance answers never trigger the Maps handoff.
+        .onChange(of: navigationEventKey, initial: true) { _, newKey in
+            guard newKey != nil,
+                  let event = vm.navigationEvent,
+                  let url = appleMapsURL(for: event) else { return }
+            openURL(url)
+        }
+    }
+
+    private var navigationEventKey: String? {
+        guard let event = vm.navigationEvent else { return nil }
+        return "\(event.channelName)|\(event.source ?? "")|\(event.latitude)|\(event.longitude)|\(event.label)"
+    }
+
+    private func appleMapsURL(for event: NavigationEvent) -> URL? {
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = "maps.apple.com"
+        var queryItems = [
+            URLQueryItem(name: "daddr", value: "\(event.latitude),\(event.longitude)"),
+            URLQueryItem(name: "q", value: event.label),
+        ]
+        if let source = event.source?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !source.isEmpty {
+            queryItems.append(URLQueryItem(name: "saddr", value: source))
+        }
+        components.queryItems = queryItems
+        return components.url
     }
 
     private var agentStateText: String {

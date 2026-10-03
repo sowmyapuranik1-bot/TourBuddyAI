@@ -5,6 +5,7 @@ import AgoraAgentClientToolkit
 /// Owns the Agora RTC + RTM engines and `ConversationalAIAPIImpl`,
 /// and conforms to `ConversationalAIAPIEventHandler` to surface transcript and
 /// agent-state updates to the caller.
+/// RTC carries the voice session; RTM connects the client toolkit to the agent's session events.
 ///
 /// Lifecycle (the exact toolkit sequence):
 ///   1. create RTC engine, `loadAudioSettings()`, join channel

@@ -8,10 +8,11 @@ HTTP APIs:
 - POST /stopAgent      -> Stop agent
 """
 import logging
+import math
 import os
 import random
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from dotenv import load_dotenv
 
 # Load environment variables from .env.local or .env
@@ -21,7 +22,7 @@ load_dotenv(os.path.join(_base_dir, '.env'), override=True)
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from agora_agent.agentkit.token import generate_convo_ai_token
 from agent import Agent
 
@@ -57,7 +58,8 @@ except ValueError as e:
     agent = None
 
 
-# FastAPI application
+# FastAPI provides configuration and lifecycle APIs for the iOS Agora client,
+# plus the navigation-event handoff between the agent and that client.
 app = FastAPI(
     title="Agora SwiftUI Quickstart Service",
     version="1.0.0",
@@ -73,6 +75,8 @@ app.add_middleware(
 )
 
 router = APIRouter()
+# Single-process, one-pending-event-per-channel queue; GET consumes each event once.
+_pending_navigation_events: Dict[str, Dict[str, Any]] = {}
 
 
 # Request models
@@ -87,6 +91,16 @@ class StartAgentRequest(BaseModel):
 class StopAgentRequest(BaseModel):
     """Request body for POST /stopAgent"""
     agentId: str
+
+
+class NavigationEventRequest(BaseModel):
+    """Navigation destination event prepared for Agora RTM delivery."""
+    type: Literal["navigation"]
+    channel_name: str = Field(min_length=1, max_length=64)
+    source: Optional[str] = Field(default=None, max_length=256)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    label: str = Field(min_length=1, max_length=256)
 
 
 # API endpoints
@@ -187,6 +201,37 @@ async def stop_agent(request: StopAgentRequest):
     except Exception as e:
         _log_route_error("/stopAgent", e, agentId=request.agentId)
         raise _to_http_error(e)
+
+
+@router.post("/navigation-event", status_code=202)
+async def navigation_event(request: NavigationEventRequest):
+    """Validate and queue one navigation instruction for the matching iOS channel."""
+    if not request.channel_name.strip():
+        raise HTTPException(status_code=422, detail="channel_name cannot be blank")
+    if not request.label.strip():
+        raise HTTPException(status_code=422, detail="label cannot be blank")
+    if not math.isfinite(request.latitude) or not math.isfinite(request.longitude):
+        raise HTTPException(status_code=422, detail="coordinates must be finite numbers")
+
+    event = request.dict(exclude={"source"})
+    if request.source and request.source.strip():
+        event["source"] = request.source.strip()
+    _pending_navigation_events[request.channel_name] = event
+
+    return {
+        "code": 0,
+        "msg": "queued",
+        "data": event,
+    }
+
+
+@router.get("/navigation-event/{channel_name}")
+async def get_navigation_event(channel_name: str):
+    """Return and consume the channel's pending event so polling cannot replay it."""
+    event = _pending_navigation_events.pop(channel_name, None)
+    if event is None:
+        raise HTTPException(status_code=404, detail="No pending navigation event")
+    return {"code": 0, "msg": "success", "data": event}
 
 
 app.include_router(router)
