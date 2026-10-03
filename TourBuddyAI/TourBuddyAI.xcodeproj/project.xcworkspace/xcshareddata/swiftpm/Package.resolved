@@ -1,0 +1,42 @@
+{
+  "originHash" : "29a6f9ddcc184fd4b69bf7589dd2f2bc35e043ed35194169d0c526a190df57cd",
+  "pins" : [
+    {
+      "identity" : "agent-client-toolkit-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AgoraIO/agent-client-toolkit-swift",
+      "state" : {
+        "revision" : "1a30204169bbb46aa8cbd9698b5945d1377fdc09",
+        "version" : "2.9.0"
+      }
+    },
+    {
+      "identity" : "agorainfra_ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AgoraIO/AgoraInfra_iOS.git",
+      "state" : {
+        "revision" : "4dfb30919815b1d4f2abb9e2cfbff345cfe5e493",
+        "version" : "1.3.16"
+      }
+    },
+    {
+      "identity" : "agorartcengine_ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AgoraIO/AgoraRtcEngine_iOS.git",
+      "state" : {
+        "revision" : "a82c611ad23e7c0b5342e0cd99d36d1ba6288d01",
+        "version" : "4.5.1"
+      }
+    },
+    {
+      "identity" : "agorartm_ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/AgoraIO/AgoraRTM_iOS.git",
+      "state" : {
+        "revision" : "f2b54b5cd96b41c697bac82e21b887e81dc21e96",
+        "version" : "2.2.8"
+      }
+    }
+  ],
+  "version" : 3
+}
