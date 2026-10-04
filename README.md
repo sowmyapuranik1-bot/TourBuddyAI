@@ -8,7 +8,8 @@ TourBuddy AI lets users talk naturally with an AI tour guide to explore places, 
 
 <img width="502" height="952" alt="Screenshot 2026-10-04 at 10 04 06 PM" src="https://github.com/user-attachments/assets/433232d3-bd37-4dd5-bb54-6ef06f28e962" />
 
-<img width="1206" height="2622" alt="Simulator Screenshot - iPhone 17 Pro - 2026-10-04 at 22 30 20" src="https://github.com/user-attachments/assets/ff8cd2cd-084f-4709-baba-1ec86b89f190" />
+<img width="502" height="952" alt="Screenshot 2026-10-04 at 10 38 15 PM" src="https://github.com/user-attachments/assets/7195a9d0-b281-49f6-855e-f73c64bbeee9" />
+
 
 ## ✨ Features
 
