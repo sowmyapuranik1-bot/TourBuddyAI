@@ -30,34 +30,76 @@ struct TourBuddyCallView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 20) {
+            VStack(spacing: 0) {
 
-                // Header
-                Text("TourBuddy AI")
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
+                // Keep the visual identity in its own fixed region above the conversation.
+                VStack(spacing: 0) {
+                    Text("TourBuddy AI")
+                        .font(.title2.bold())
+                        .foregroundStyle(.white)
 
-                // Orb
-                TourBuddyOrb()
+                    TourBuddyOrb()
+                        .scaleEffect(0.75)
+                        .frame(height: 240)
+                        .clipped()
 
-                // Agent state
-                Text(agentStateText)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                    Text(agentStateText)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .padding(.bottom, 14)
+                }
+                .background(alignment: .bottom) {
+                    Ellipse()
+                        .fill(Color.purple.opacity(0.12))
+                        .frame(width: 280, height: 56)
+                        .blur(radius: 24)
+                        .offset(y: 20)
+                        .allowsHitTesting(false)
+                }
 
-                // Transcript
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                // The transparent scroll view stays bounded between the orb and controls.
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
 
-                        ForEach(vm.turns, id: \.rowID) { turn in
-                            TranscriptRow(turn: turn)
+                            ForEach(vm.turns, id: \.rowID) { turn in
+                                let mapLinkEvent = turn.rowID == mapLinkResponseRowID
+                                    ? vm.mapLinkEvent
+                                    : nil
+                                TranscriptRow(turn: turn, mapLinkEvent: mapLinkEvent)
+                                    .id(turn.rowID)
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 60)
+                        .padding(.bottom, 12)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.clear)
+                    .mask(alignment: .top) {
+                        VStack(spacing: 0) {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .black.opacity(0.35), location: 0.45),
+                                    .init(color: .black, location: 1),
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 60)
+                            Rectangle().fill(.black)
                         }
                     }
-                    .padding(.horizontal)
+                    .onChange(of: vm.turns.last?.rowID, initial: true) { _, rowID in
+                        guard let rowID else { return }
+                        withAnimation {
+                            proxy.scrollTo(rowID, anchor: .bottom)
+                        }
+                    }
                 }
-                .background(Color.clear)
 
-                // Controls
+                // Controls remain outside the transcript's scroll region.
                 HStack(spacing: 16) {
 
                     // Mute
@@ -73,7 +115,7 @@ struct TourBuddyCallView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(
-                            Color.white.opacity(0.12),
+                            vm.micMuted ? Color.red.opacity(0.8) : Color.white.opacity(0.12),
                             in: RoundedRectangle(cornerRadius: 14)
                         )
                         .foregroundStyle(.white)
@@ -81,7 +123,7 @@ struct TourBuddyCallView: View {
 
                     // End Tour
                     Button {
-                        vm.end()
+                        Task { await vm.end() }
                     } label: {
                         Label(
                             "End Tour",
@@ -96,8 +138,10 @@ struct TourBuddyCallView: View {
                         .foregroundStyle(.white)
                     }
                 }
+                .padding(.top, 12)
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top, 8)
         }
         .onAppear(perform: requestMicPermission)
         // Only an explicit navigation action creates this event; ordinary place
@@ -115,13 +159,30 @@ struct TourBuddyCallView: View {
         return "\(event.channelName)|\(event.source ?? "")|\(event.latitude)|\(event.longitude)|\(event.label)"
     }
 
+    private var mapLinkResponseRowID: String? {
+        guard vm.mapLinkEvent != nil,
+              let requestIndex = vm.turns.lastIndex(where: { turn in
+                  guard turn.type == .user else { return false }
+                  let text = turn.text.lowercased()
+                  guard text.contains("google map") else { return false }
+                  let asksForLink = text.contains("link") || text.contains("url")
+                  let asksToShowPlace =
+                      (text.contains("show") || text.contains("view")) &&
+                      !["direction", "route", "navigate", "take me to", "go to", "open "]
+                          .contains(where: { text.contains($0) })
+                  return asksForLink || asksToShowPlace
+              }) else { return nil }
+
+        return vm.turns.dropFirst(requestIndex + 1)
+            .first(where: { $0.type == .agent })?.rowID
+    }
+
     private func appleMapsURL(for event: NavigationEvent) -> URL? {
         var components = URLComponents()
         components.scheme = "http"
         components.host = "maps.apple.com"
         var queryItems = [
             URLQueryItem(name: "daddr", value: "\(event.latitude),\(event.longitude)"),
-            URLQueryItem(name: "q", value: event.label),
         ]
         if let source = event.source?.trimmingCharacters(in: .whitespacesAndNewlines),
            !source.isEmpty {
@@ -132,6 +193,9 @@ struct TourBuddyCallView: View {
     }
 
     private var agentStateText: String {
+        if case .speaking = vm.agentState {
+            return "Speaking..."
+        }
 
         switch vm.agentState {
 
@@ -139,10 +203,10 @@ struct TourBuddyCallView: View {
             return "Ready"
 
         case .silent:
-            return "Listening..."
+            return vm.micMuted ? "Muted" : "Listening"
 
         case .listening:
-            return "Listening..."
+            return vm.micMuted ? "Muted" : "Listening"
 
         case .thinking:
             return "Thinking..."
@@ -169,6 +233,7 @@ private func requestMicPermission() {
 private struct TranscriptRow: View {
 
     let turn: Transcript
+    let mapLinkEvent: MapLinkEvent?
 
     private var isAgent: Bool {
         turn.type == .agent
@@ -179,7 +244,9 @@ private struct TranscriptRow: View {
         HStack {
 
             if isAgent {
-                agentBubble
+                if !displayedText.isEmpty || mapLinkURL != nil {
+                    agentBubble
+                }
                 Spacer()
             } else {
                 Spacer()
@@ -192,20 +259,47 @@ private struct TranscriptRow: View {
 
     private var agentBubble: some View {
 
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
 
             Text("TourBuddy")
                 .font(.caption.bold())
                 .foregroundStyle(.white.opacity(0.6))
 
-            Text(turn.text)
-                .foregroundStyle(.white)
-                .padding(12)
-                .background(
-                    Color.white.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: 14)
-                )
+            VStack(alignment: .leading, spacing: 6) {
+                if !displayedText.isEmpty {
+                    Text(displayedText)
+                        .foregroundStyle(.white)
+                }
+                if let event = mapLinkEvent, let url = mapLinkURL {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.type == "apple_maps_link" ? "Apple Maps:" : "Google Maps:")
+                            .foregroundStyle(.white)
+                        Link(destination: url) {
+                            Text(event.url)
+                                .foregroundStyle(.cyan)
+                                .underline()
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: 280, alignment: .leading)
+                    }
+                }
+            }
         }
+    }
+
+    private var displayedText: String {
+        guard isAgent else { return turn.text }
+        return turn.text
+            .replacingOccurrences(of: #"\[[^\]]+\]\([^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\[here\]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\b(?:https?://)?(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var mapLinkURL: URL? {
+        guard let event = mapLinkEvent else { return nil }
+        return URL(string: event.url)
     }
 
     // MARK: User Bubble

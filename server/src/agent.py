@@ -92,6 +92,7 @@ class Agent:
 
         # This action is only for explicit navigate/open-in-Maps intent.
         navigation_tools = None
+        map_link_tools = None
         navigation_event_url = os.getenv("NAVIGATION_EVENT_URL")
         if navigation_event_url:
             parsed_navigation_url = urlparse(navigation_event_url)
@@ -152,17 +153,158 @@ class Agent:
                 }
             ]
 
+            navigation_path = parsed_navigation_url.path.rstrip("/")
+            if navigation_path.endswith("/navigation-event"):
+                link_path = f"{navigation_path[:-len('navigation-event')]}map-link"
+            else:
+                link_path = f"{navigation_path}/map-link"
+            map_link_event_url = parsed_navigation_url._replace(path=link_path).geturl()
+            map_link_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "publish_google_maps_link",
+                        "description": (
+                            "For every explicit request for a Google Maps link or URL, "
+                            "or to show/view a specific place on Google Maps (without "
+                            "requesting directions or navigation), first call search_places "
+                            "to resolve that place, then MUST call this tool with its exact "
+                            "googleMapsLinks.placeUrl and place label. Do not answer with "
+                            "text instead of calling this tool. Never invent, construct, "
+                            "alter, or use another URL. If you offer a Google Maps URL "
+                            "after an ordinary place answer, call this tool immediately "
+                            "before saying the link is available; never ask whether the "
+                            "user wants the URL and stop. Do not call for ordinary place "
+                            "questions unless you offer a link, or for navigation requests."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {
+                                    "type": "string",
+                                    "description": "The exact googleMapsLinks.placeUrl returned by search_places.",
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "description": "Human-readable name of the place.",
+                                },
+                            },
+                            "required": ["url", "label"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "server": {
+                        "method": "POST",
+                        "url": map_link_event_url,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "type": "google_maps_link",
+                            "channel_name": "{{template_variables.channel_name}}",
+                            "url": "{{args.url}}",
+                            "label": "{{args.label}}",
+                        },
+                        "timeout_ms": 10000,
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "publish_apple_maps_link",
+                        "description": (
+                            "For an explicit request for an Apple Maps link, publish the "
+                            "resolved destination to the app. Do not call this for a request "
+                            "to navigate or open Maps; those use the navigation action."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "latitude": {
+                                    "type": "number",
+                                    "description": "Resolved destination latitude from search_places.",
+                                },
+                                "longitude": {
+                                    "type": "number",
+                                    "description": "Resolved destination longitude from search_places.",
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "description": "Human-readable destination name.",
+                                },
+                            },
+                            "required": ["latitude", "longitude", "label"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "server": {
+                        "method": "POST",
+                        "url": map_link_event_url,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {
+                            "type": "apple_maps_link",
+                            "channel_name": "{{template_variables.channel_name}}",
+                            "latitude": "{{args.latitude}}",
+                            "longitude": "{{args.longitude}}",
+                            "label": "{{args.label}}",
+                        },
+                        "timeout_ms": 10000,
+                    },
+                },
+            ]
+
+        custom_tools = (navigation_tools or []) + (map_link_tools or [])
+
         system_prompt = (
-            "You are TourBuddy AI, a friendly voice tour guide. Help users explore "
-            "places, attractions, food, culture, and travel tips. Use search_places "
-            "to find or identify places and compute_routes for route requests when "
-            "both origin and destination are known. Ask for missing or ambiguous "
-            "locations. Keep replies to one or two sentences and include source "
-            "attribution when available."
+            "You are TourBuddy, a friendly, helpful AI voice companion. Users may "
+            "naturally address you as TourBuddy. Answer general questions naturally, "
+            "not only travel questions. Use search_places for geographic information "
+            "and place discovery, and compute_routes for route questions when both "
+            "origin and destination are known. Ask for missing or ambiguous locations. "
+            "For ordinary place, restaurant, and route requests that do not explicitly "
+            "ask for a map link, summarize useful results in natural language; do not "
+            "repeat, display, or speak URLs from Maps tool results, and do not publish a "
+            "map-link event. This restriction does not apply to explicit map-link requests. "
+            "For ordinary place questions, do not volunteer to provide a Google Maps URL. "
+            "If you do offer one, first call publish_google_maps_link with the exact "
+            "googleMapsLinks.placeUrl and place label, then briefly say it was added; "
+            "never ask whether the user wants the URL before publishing it. "
+            "If the user explicitly asks for a map URL or link, provide a legitimate "
+            "URL only if it is available from a Google Maps tool result or trusted "
+            "context; never invent one. If a separate text/link display is available, "
+            "provide it there; never include or read a long raw URL in spoken output. "
+            "If no separate text/link display is available, do not include the URL. "
+            "After providing the link, ask, 'Would you like me to navigate you there?' "
+            "only if the user has not already explicitly asked to navigate. Only navigate "
+            "when the user explicitly requests it; for explicit navigation requests, "
+            "call the navigation tool without asking for confirmation. Answer place "
+            "questions normally without triggering navigation. Keep "
+            "spoken replies concise and include source attribution when available."
         )
+        if map_link_tools:
+            system_prompt += (
+                "An explicit request for a Google Maps link, Google Maps URL, or to "
+                "show/view a specific place on Google Maps (without asking for directions "
+                "or navigation) overrides the ordinary-search URL restriction. First "
+                "resolve the requested place with search_places, including natural-language "
+                "references such as 'the first restaurant' when needed. Then you MUST call "
+                "publish_google_maps_link with that place's exact googleMapsLinks.placeUrl "
+                "and label. Do not answer the link request with text instead of calling the "
+                "tool, and do not invent, construct, or alter a URL. After the tool succeeds, "
+                "give one short natural spoken response such as 'I've added the Google Maps "
+                "link.' Never include the raw URL in assistant response text or speech; the "
+                "separate map-link event is the only place the URL should be exposed. Do not "
+                "claim the link was added unless the tool succeeds. For an Apple Maps link, "
+                "resolve the place "
+                "with search_places and call publish_apple_maps_link. The event displays the "
+                "URL in the app. Never put a URL, Markdown link syntax, or the placeholder "
+                "'[here]' in your spoken response. A link request is not a request to "
+                "navigate: do not call publish_navigation_destination. Do not publish links "
+                "for ordinary place questions or searches. Offer navigation only if the user "
+                "has not already explicitly asked to navigate."
+            )
         if navigation_tools:
             system_prompt += (
-                " Treat a direct command to navigate to, take the user to, or open a "
+                " Treat only an explicit request to navigate to, go to, take the user "
+                "to, or open a "
                 "destination in Maps as an action request. For those requests, resolve "
                 "the destination with search_places if its coordinates are not already "
                 "known. If the user explicitly provides a starting location, pass it as "
@@ -172,18 +314,18 @@ class Agent:
                 "Google Maps URL is not a substitute for this call. For ordinary place "
                 "questions, place searches, distance questions, and requests for route "
                 "information, answer normally with the relevant Maps tools and do not "
-                "call the navigation action unless the user explicitly asks to navigate "
-                "or open the destination in Maps. After the action succeeds, respond "
-                "briefly and naturally; never mention the tool or provide a Maps URL."
+                "call the navigation action unless the user explicitly asks to navigate, "
+                "go to, or open the destination in Maps. After the action succeeds, respond "
+                "briefly and naturally without mentioning the tool."
             )
 
         llm = OpenAI(
             api_key=self.openai_api_key,
             model=self.openai_model,
             mcp_servers=maps_mcp_servers,
-            tools=navigation_tools,
+            tools=custom_tools or None,
             template_variables=(
-                {"channel_name": channel_name} if navigation_tools else None
+                {"channel_name": channel_name} if custom_tools else None
             ),
             system_messages=[
                 {

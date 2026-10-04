@@ -19,6 +19,16 @@ struct NavigationEvent: Decodable {
         case type, channelName = "channel_name", source, latitude, longitude, label
     }
 }
+struct MapLinkEvent: Decodable {
+    let type: String
+    let channelName: String
+    let url: String
+    let label: String
+
+    enum CodingKeys: String, CodingKey {
+        case type, channelName = "channel_name", url, label
+    }
+}
 private struct Envelope<T: Decodable>: Decodable { let code: Int; let data: T; let msg: String? }
 private struct StartData: Decodable { let agentId: String; enum CodingKeys: String, CodingKey { case agentId = "agent_id" } }
 
@@ -59,6 +69,25 @@ struct BackendApi {
         guard (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
 
         return try JSONDecoder().decode(Envelope<NavigationEvent>.self, from: data).data
+    }
+    func getMapLinkEvent(channelName: String) async throws -> MapLinkEvent? {
+        let pathCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let encodedChannelName = channelName.addingPercentEncoding(withAllowedCharacters: pathCharacters),
+              var components = URLComponents(
+                url: baseURL.appendingPathComponent("map-link"),
+                resolvingAgainstBaseURL: false
+              ) else {
+            throw URLError(.badURL)
+        }
+        components.percentEncodedPath += "/\(encodedChannelName)"
+        guard let url = components.url else { throw URLError(.badURL) }
+
+        let (data, response) = try await session.data(from: url)
+        guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if response.statusCode == 404 { return nil }
+        guard (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
+
+        return try JSONDecoder().decode(Envelope<MapLinkEvent>.self, from: data).data
     }
     private func post(_ path: String, _ body: [String: Any]) async throws -> Data {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))

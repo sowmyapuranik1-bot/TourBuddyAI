@@ -69,11 +69,24 @@ final class AgoraSession: NSObject, ConversationalAIAPIEventHandler {
         rtc?.muteLocalAudioStream(muted)
     }
 
-    func stop(channelName: String) {
-        api?.unsubscribeMessage(channelName: channelName) { _ in }
-        api?.destroy()
-        rtc?.leaveChannel(nil)
-        rtm?.logout { _, _ in }
+    func stop(channelName: String) async {
+        if let api {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                api.unsubscribeMessage(channelName: channelName) { _ in continuation.resume() }
+            }
+            api.destroy()
+        }
+        if let rtc {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                rtc.leaveChannel { _ in continuation.resume() }
+            }
+        }
+        if let rtm {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                rtm.logout { _, _ in continuation.resume() }
+            }
+            rtm.destroy()
+        }
         AgoraRtcEngineKit.destroy()
         api = nil
         rtc = nil

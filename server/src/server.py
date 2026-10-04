@@ -13,6 +13,7 @@ import os
 import random
 import time
 from typing import Any, Dict, Literal, Optional
+from urllib.parse import urlencode, urlparse
 from dotenv import load_dotenv
 
 # Load environment variables from .env.local or .env
@@ -77,6 +78,7 @@ app.add_middleware(
 router = APIRouter()
 # Single-process, one-pending-event-per-channel queue; GET consumes each event once.
 _pending_navigation_events: Dict[str, Dict[str, Any]] = {}
+_pending_map_link_events: Dict[str, Dict[str, Any]] = {}
 
 
 # Request models
@@ -101,6 +103,34 @@ class NavigationEventRequest(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     label: str = Field(min_length=1, max_length=256)
+
+
+class MapLinkEventRequest(BaseModel):
+    """A requested Google or Apple Maps link to display in the matching iOS call."""
+    type: Literal["google_maps_link", "apple_maps_link"]
+    channel_name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=256)
+    url: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+
+
+def _is_allowed_google_maps_url(value: str) -> bool:
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    try:
+        valid_port = parsed.port in (None, 443)
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or parsed.username or parsed.password or not valid_port:
+        return False
+    if host == "maps.app.goo.gl":
+        return True
+    if host == "maps.google.com":
+        return True
+    return host in {"google.com", "www.google.com"} and (
+        parsed.path == "/maps" or parsed.path.startswith("/maps/")
+    )
 
 
 # API endpoints
@@ -231,6 +261,41 @@ async def get_navigation_event(channel_name: str):
     event = _pending_navigation_events.pop(channel_name, None)
     if event is None:
         raise HTTPException(status_code=404, detail="No pending navigation event")
+    return {"code": 0, "msg": "success", "data": event}
+
+
+@router.post("/map-link", status_code=202)
+async def map_link_event(request: MapLinkEventRequest):
+    """Validate and queue one explicitly requested map link for the iOS channel."""
+    if not request.channel_name.strip() or not request.label.strip():
+        raise HTTPException(status_code=422, detail="channel_name and label cannot be blank")
+
+    if request.type == "google_maps_link":
+        if not request.url or not _is_allowed_google_maps_url(request.url):
+            raise HTTPException(status_code=422, detail="url must be an HTTPS Google Maps URL")
+        event = request.dict(exclude_none=True)
+    else:
+        if request.latitude is None or request.longitude is None:
+            raise HTTPException(status_code=422, detail="Apple Maps links require destination coordinates")
+        event = request.dict(exclude={"url"}, exclude_none=True)
+        event["url"] = "http://maps.apple.com/?" + urlencode(
+            {
+                "daddr": f"{request.latitude},{request.longitude}",
+                "q": request.label,
+            }
+        )
+
+    _pending_map_link_events[request.channel_name] = event
+    # Keep the link out of the custom tool response returned to the LLM.
+    return {"code": 0, "msg": "queued"}
+
+
+@router.get("/map-link/{channel_name}")
+async def get_map_link_event(channel_name: str):
+    """Return and consume the channel's pending map link once."""
+    event = _pending_map_link_events.pop(channel_name, None)
+    if event is None:
+        raise HTTPException(status_code=404, detail="No pending map link")
     return {"code": 0, "msg": "success", "data": event}
 
 

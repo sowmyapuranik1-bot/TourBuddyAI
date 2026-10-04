@@ -19,6 +19,7 @@ final class CallViewModel {
     private(set) var agentState: AgentState = .idle
     // Observable by the call view when the backend poller receives a navigation event.
     private(set) var navigationEvent: NavigationEvent?
+    private(set) var mapLinkEvent: MapLinkEvent?
     var micMuted = false
 
     private let api: BackendApi
@@ -67,12 +68,14 @@ final class CallViewModel {
         }
     }
 
-    func end() {
+    func end() async {
         navigationPollingTask?.cancel()
         navigationPollingTask = nil
-        if let channelName { session?.stop(channelName: channelName) }
+        if let channelName, let session {
+            await session.stop(channelName: channelName)
+        }
         if let agentId {
-            Task { try? await api.stopAgent(agentId: agentId) }
+            try? await api.stopAgent(agentId: agentId)
         }
         session = nil
         agentId = nil
@@ -80,6 +83,7 @@ final class CallViewModel {
         turns = []
         agentState = .idle
         navigationEvent = nil
+        mapLinkEvent = nil
         micMuted = false
         phase = .idle
     }
@@ -107,6 +111,13 @@ final class CallViewModel {
                 } catch {
                     // Keep polling; transient request errors should not end the call.
                 }
+                do {
+                    if let event = try await api.getMapLinkEvent(channelName: channelName) {
+                        self?.mapLinkEvent = event
+                    }
+                } catch {
+                    // Keep polling; transient request errors should not end the call.
+                }
 
                 do {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -122,6 +133,8 @@ final class CallViewModel {
     /// otherwise the agent reply overwrites the user's line. Order by turn, then
     /// user before agent within a turn.
     private func upsert(_ transcript: Transcript) {
+        if transcript.type == .user && transcript.status != .end { return }
+
         if let index = turns.firstIndex(where: {
             $0.turnId == transcript.turnId && $0.type == transcript.type
         }) {

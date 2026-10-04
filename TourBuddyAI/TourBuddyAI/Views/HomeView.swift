@@ -10,6 +10,7 @@ import SwiftUI
 struct HomeView: View {
 
     @State private var viewModel = CallViewModel()
+    @State private var isConnecting = false
 
     var body: some View {
 
@@ -18,6 +19,11 @@ struct HomeView: View {
                 TourBuddyCallView(vm: viewModel)
             } else {
                 homeContent
+            }
+        }
+        .onChange(of: viewModel.phase) { _, phase in
+            if phase == .idle {
+                isConnecting = false
             }
         }
     }
@@ -62,7 +68,40 @@ struct HomeView: View {
 
                     TourBuddyOrb()
 
-                    TapToTalkButton(viewModel: viewModel)
+                    Button {
+                        guard !isConnecting else { return }
+                        isConnecting = true
+                        Task {
+                            await viewModel.connect()
+                            if viewModel.phase != .inCall {
+                                isConnecting = false
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            if isConnecting {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "mic.fill")
+                            }
+
+                            Text(isConnecting ? "Connecting..." : "Tap to Talk")
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 15)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.12))
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                    }
+                    .disabled(isConnecting)
                 }
                 .frame(maxWidth: .infinity)
 
